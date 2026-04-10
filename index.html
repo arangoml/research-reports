@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ArangoML Research Reports</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+       max-width: 900px; margin: 0 auto; padding: 40px 20px; background: #f5f6fa; color: #2d3436; }
+h1 { font-size: 28px; margin-bottom: 8px; color: #0c2461; }
+p.subtitle { font-size: 16px; color: #666; margin-bottom: 30px; }
+.report-card { background: white; border-radius: 10px; padding: 24px; margin: 16px 0;
+               box-shadow: 0 2px 8px rgba(0,0,0,0.08); transition: transform 0.2s; }
+.report-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
+.report-card h2 { font-size: 20px; margin-bottom: 8px; }
+.report-card h2 a { color: #1e3799; text-decoration: none; }
+.report-card h2 a:hover { text-decoration: underline; }
+.report-card p { font-size: 14px; line-height: 1.6; color: #555; }
+.tag { display: inline-block; padding: 2px 10px; border-radius: 4px; font-size: 12px;
+       font-weight: 600; margin-right: 6px; }
+.tag-retrieval { background: #e3f2fd; color: #1565c0; }
+.tag-benchmark { background: #fff3e0; color: #e65100; }
+.tag-arangodb { background: #e8f5e9; color: #2e7d32; }
+.date { font-size: 12px; color: #999; }
+</style>
+</head>
+<body>
+<h1>ArangoML Research Reports</h1>
+<p class="subtitle">Interactive experiment reports and benchmarks</p>
+
+<div class="report-card">
+  <h2><a href="retrieval-eval/embedding-comparison/">Dense vs Token-Level Retrieval for Multi-Hop QA</a></h2>
+  <p>
+    <span class="tag tag-retrieval">Retrieval</span>
+    <span class="tag tag-benchmark">Benchmark</span>
+    <span class="date">April 2026</span>
+  </p>
+  <p style="margin-top: 10px;">
+    Comparing 14 embedding models (9 OpenAI dense + 5 ColBERT-style token-level) across two
+    multi-hop QA datasets: MuSiQue (102K short Wikipedia paragraphs) and MultiHop-RAG (609 long news articles).
+    Evaluates Recall, Success, MRR at multiple K values with exact brute-force search.
+    Results filterable by hop count (2, 3, 4).
+  </p>
+</div>
+
+<div class="report-card">
+  <h2><a href="retrieval-eval/vector-index-tuning/">ArangoDB Vector Index vs Brute Force</a></h2>
+  <p>
+    <span class="tag tag-arangodb">ArangoDB</span>
+    <span class="tag tag-retrieval">Retrieval</span>
+    <span class="date">April 2026</span>
+  </p>
+  <p style="margin-top: 10px;">
+    Quantifies the accuracy loss and timing overhead of ArangoDB's APPROX_NEAR_COSINE (IVF vector index)
+    compared to exact brute-force cosine similarity. Tests 8 embedding variants on 6,655 multi-hop questions
+    with nLists=3,192 and nProbe=159. Measures network RTT separately to isolate index computation time.
+  </p>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vector Index vs Brute Force Comparison</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+       max-width: 1500px; margin: 0 auto; padding: 20px; background: #f5f6fa; color: #2d3436; }
+h2 { font-size: 20px; margin: 25px 0 12px; color: #1e3799; border-bottom: 2px solid #4a69bd; padding-bottom: 6px; }
+h3 { font-size: 16px; margin: 15px 0 8px; color: #333; }
+p { line-height: 1.7; margin-bottom: 10px; font-size: 15px; }
+a { color: #1e3799; }
+.section { background: white; border-radius: 10px; padding: 24px; margin: 16px 0;
+           box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+.key-finding { background: #fff9e6; border-left: 4px solid #f39c12; padding: 14px 18px;
+               margin: 12px 0; border-radius: 0 8px 8px 0; font-size: 15px; }
+.note { color: #888; font-style: italic; font-size: 13px; }
+.chart { width: 100%; height: 480px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 12px 0 0; }
+.tab-btn { padding: 8px 16px; border: 1px solid #ddd; border-bottom: none; border-radius: 6px 6px 0 0;
+            background: #f0f0f0; cursor: pointer; font-size: 13px; transition: all 0.2s; }
+.tab-btn:hover { background: #e0e0e0; }
+.tab-btn.active { background: white; border-color: #4a69bd; color: #1e3799; font-weight: 600;
+                   box-shadow: 0 -2px 0 #4a69bd inset; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { background: #2d3436; color: white; padding: 10px 12px; text-align: left; cursor: pointer;
+      position: sticky; top: 0; user-select: none; white-space: nowrap; z-index: 2; }
+th:hover { background: #636e72; }
+th .sort-arrow { font-size: 10px; margin-left: 4px; opacity: 0.5; }
+td { padding: 8px 12px; border-bottom: 1px solid #eee; }
+tr:hover { background: #dfe6e9 !important; }
+.table-wrap { max-height: 600px; overflow-y: auto; border-radius: 8px; border: 1px solid #ddd; }
+.filter-row th { background: #f0f0f0; padding: 4px 6px; position: sticky; top: 38px; z-index: 1; }
+.filter-row input, .filter-row select { width: 100%; padding: 4px; border: 1px solid #ccc;
+    border-radius: 3px; font-size: 12px; box-sizing: border-box; }
+details summary { cursor: pointer; font-weight: 600; padding: 10px 14px; background: #f0f0f0;
+    border-radius: 6px; user-select: none; font-size: 14px; }
+details summary:hover { background: #e0e0e0; }
+details[open] summary { border-radius: 6px 6px 0 0; background: #ddd; }
+.table-info { font-size: 12px; color: #888; margin: 4px 0; }
+.stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+.stat-card { background: #f8f9fa; border-radius: 8px; padding: 16px; text-align: center; border-left: 4px solid #4a69bd; }
+.stat-card .value { font-size: 28px; font-weight: 700; color: #1e3799; }
+.stat-card .label { font-size: 13px; color: #666; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<div style="background: linear-gradient(135deg, #6c5ce7 0%, #a29bfe 100%); color: white;
+            border-radius: 12px; padding: 40px; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
+  <h1 style="color: white; margin: 0 0 8px; font-size: 32px;">Vector Index vs Brute Force</h1>
+  <p style="font-size: 18px; opacity: 0.9; margin: 0 0 4px;">How much does ArangoDB's approximate search cost in accuracy and time?</p>
+  <p style="color: rgba(255,255,255,0.6); font-size: 12px;">Generated: 2026-04-10 19:23</p>
+</div>
+
+<div class="section">
+<h2>Motivation</h2>
+<p>When deploying a vector search system in production, you rarely compute exact nearest neighbors.
+Instead, databases like <a href="https://arangodb.com" target="_blank">ArangoDB</a> use
+<strong>approximate nearest neighbor (ANN)</strong> indexes that trade a small amount of accuracy
+for significantly faster search at scale.</p>
+
+<p>But how much accuracy do you actually lose? And is the speed gain worth it?</p>
+
+<p>In a companion experiment (<a href="../embedding-comparison/">Dense vs Token-Level Retrieval</a>),
+we established exact brute-force baselines for 14 embedding models across two multi-hop QA datasets.
+This report takes the best-performing dense embedding variants and asks:
+<strong>what happens when we replace exact search with ArangoDB's <code>APPROX_NEAR_COSINE</code>?</strong></p>
+
+<h3>How we measure</h3>
+<p>For each question, we run <strong>both methods side-by-side</strong>:</p>
+<ol style="margin: 10px 0 10px 20px; font-size: 15px; line-height: 1.8;">
+  <li><strong>ArangoDB APPROX_NEAR_COSINE</strong> &mdash; sends the query vector to the remote ArangoDB cluster,
+      which searches using its IVF vector index and returns the top-100 results. This includes network latency.</li>
+  <li><strong>Local brute force</strong> &mdash; computes <code>query_vec @ all_chunks.T</code> (exact cosine similarity
+      via numpy dot product) locally in memory. No network, no approximation.</li>
+</ol>
+<p>Both methods receive the same query vector and return the same format (top-100 ranked chunk IDs with scores).
+We then compute retrieval metrics on both and measure the difference (loss).
+Timing is measured per-query for both methods, and we separately measure the network round-trip time (RTT)
+to isolate the actual index computation time from network overhead.</p>
+
+<h3>Metrics</h3>
+<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0;">
+  <div style="background: #f8f9fa; border-radius: 8px; padding: 14px; border-left: 4px solid #2ecc71;">
+    <strong style="font-size: 15px; color: #27ae60;">Recall@K</strong>
+    <p style="font-size: 14px; margin: 6px 0 0; color: #555;">
+    What fraction of relevant documents appear in the top-K?
+    E.g., need 3 docs, found 2 in top-100 &rarr; Recall = 0.67</p>
+  </div>
+  <div style="background: #f8f9fa; border-radius: 8px; padding: 14px; border-left: 4px solid #e74c3c;">
+    <strong style="font-size: 15px; color: #c0392b;">Success@K</strong>
+    <p style="font-size: 14px; margin: 6px 0 0; color: #555;">
+    Did we find <em>all</em> relevant documents in top-K? Binary: 1 or 0.
+    The strictest metric &mdash; missing even one means failure.</p>
+  </div>
+  <div style="background: #f8f9fa; border-radius: 8px; padding: 14px; border-left: 4px solid #3498db;">
+    <strong style="font-size: 15px; color: #2980b9;">MRR First</strong>
+    <p style="font-size: 14px; margin: 6px 0 0; color: #555;">
+    1/rank of the first relevant document found.
+    Higher = first relevant result appears earlier.</p>
+  </div>
+  <div style="background: #f8f9fa; border-radius: 8px; padding: 14px; border-left: 4px solid #9b59b6;">
+    <strong style="font-size: 15px; color: #8e44ad;">MRR Last</strong>
+    <p style="font-size: 14px; margin: 6px 0 0; color: #555;">
+    1/rank of the last relevant document. Zero if any are missing.
+    Measures how deep you must look to have everything.</p>
+  </div>
+</div>
+<p style="font-size: 14px; color: #666;">The <strong>loss</strong> shown in this report is the percentage drop
+in each metric when using the approximate index compared to exact brute force.
+E.g., "Recall loss 5%" means the index finds 5% fewer relevant documents than exact search.</p>
+</div>
+
+<div class="section">
+<h2>Index Configuration</h2>
+<p>ArangoDB uses <strong>IVF (Inverted File) vector indexes</strong> powered by
+<a href="https://github.com/facebookresearch/faiss" target="_blank">FAISS</a> to perform approximate
+nearest neighbor search. Instead of comparing a query against every document (brute force),
+it partitions vectors into clusters and only searches the nearest clusters.</p>
+
+<p>This is faster for large collections but introduces <strong>approximation error</strong> &mdash;
+relevant documents that fall into clusters not searched will be missed. The key parameters that
+control this speed-accuracy tradeoff are:</p>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin: 16px 0;">
+  <div style="background: #f8f9fa; border-radius: 8px; padding: 16px; border-left: 4px solid #e74c3c;">
+    <strong style="font-size: 15px; color: #c0392b;">nLists</strong>
+    <p style="font-size: 14px; color: #555; margin: 6px 0 0;">
+    Number of clusters (Voronoi cells) to partition the vector space into.
+    FAISS recommends: <code>4&times;&radic;N</code> to <code>16&times;&radic;N</code>.
+    More clusters = smaller buckets = faster search but higher risk of missing neighbors.</p>
+  </div>
+  <div style="background: #f8f9fa; border-radius: 8px; padding: 16px; border-left: 4px solid #3498db;">
+    <strong style="font-size: 15px; color: #2980b9;">nProbe</strong>
+    <p style="font-size: 14px; color: #555; margin: 6px 0 0;">
+    How many clusters to search per query. Higher = slower but more accurate.
+    nProbe=1 is fastest (only check closest cluster). nProbe=nLists equals brute force.</p>
+  </div>
+  <div style="background: #f8f9fa; border-radius: 8px; padding: 16px; border-left: 4px solid #2ecc71;">
+    <strong style="font-size: 15px; color: #27ae60;">Network RTT</strong>
+    <p style="font-size: 14px; color: #555; margin: 6px 0 0;">
+    Round-trip latency to the ArangoDB server. Adds a fixed overhead to every query
+    regardless of index configuration. Measured via persistent HTTP connection.</p>
+  </div>
+</div>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="value">6,655</div>
+    <div class="label">Questions evaluated</div>
+  </div>
+  <div class="stat-card">
+    <div class="value">101,958</div>
+    <div class="label">Chunks in collection</div>
+  </div>
+  <div class="stat-card">
+    <div class="value">3,192</div>
+    <div class="label">nLists (midpoint of FAISS range)</div>
+  </div>
+  <div class="stat-card">
+    <div class="value">159</div>
+    <div class="label">nProbe (5% of nLists)</div>
+  </div>
+</div>
+
+<h3>What we index</h3>
+<p>The ArangoDB collection <a href="https://z6cxx3dl.rnd.pilot.arango.ai/ui/migonsa/db?db=migonsa&amp;page=collections" target="_blank"><code>musique_chunks</code></a> stores 101,958 documents, each containing 9 dense
+embedding fields of different sizes (from 256 to 3072 dimensions, produced by OpenAI text-embedding-3-small
+and text-embedding-3-large). We create a <strong>separate vector index on each embedding field</strong>,
+all with identical IVF parameters (nLists=3,192, nProbe=159). This lets us see how the approximation
+loss varies with embedding dimensionality while keeping everything else constant.</p>
+
+<p class="note">FAISS recommended nLists range for N=101,958: [1,277 &ndash; 5,109]. We use the midpoint (3,192).
+Network RTT measured at ~32ms on persistent connection.
+The <code>emb_large_3072</code> index is excluded &mdash; creating it with nLists=6,797 previously
+caused RocksDB corruption on a primary pod; not reattempted with current configuration.</p>
+</div>
+
+<div class="section">
+<h2>Timing Comparison</h2>
+<p>Average query time breakdown. "Index only" = APPROX total minus network RTT (~32ms).
+"Index vs BF" shows how many times slower the index computation is compared to local brute force
+(&lt;1 means index is faster, &gt;1 means brute force is faster).</p>
+
+<div id="timing_chart" class="chart"></div>
+
+<details>
+<summary>Timing Details Table (click to expand)</summary>
+<div class="table-info" id="timing-table-info"></div>
+<div class="table-wrap"><table id="timing-table"><thead></thead><tbody></tbody></table></div>
+</details>
+
+<div class="key-finding">
+<strong>Key Finding:</strong> Network RTT (~32ms) dominates the total APPROX query time (~45-55ms).
+The actual index search takes only ~10-22ms, comparable to local brute force (~5-20ms).
+At higher dimensions (1536d) the index and brute force nearly tie.
+The vector index provides no speed advantage at 102K documents &mdash; its value would appear
+at millions of documents where brute force becomes too slow.
+</div>
+</div>
+
+<div class="section">
+<h2>Metric Loss</h2>
+<p>How much accuracy does the approximate index lose compared to exact brute force?
+Select a metric to see the loss percentage across all embedding variants at each K.</p>
+
+<div class="tabs" id="loss-metric-tabs"></div>
+<div id="loss-k-selector" style="margin:8px 0; font-size:13px;"></div>
+<div id="loss_chart" class="chart"></div>
+
+<details>
+<summary>Full Metrics Table (click to expand)</summary>
+<div class="table-info" id="metric-table-info"></div>
+<div class="table-wrap"><table id="metric-table"><thead></thead><tbody></tbody></table></div>
+</details>
+
+<div class="key-finding">
+<strong>Key Finding:</strong> With nLists=3,192 and nProbe=159, the approximate index loses
+<strong>5-7% in Recall@100</strong> and <strong>7-10% in Success@100</strong> compared to exact search.
+MRR First is least affected (2-5%). The "large" model variants lose less than "small"
+(~5% vs ~7%), possibly because higher-quality embeddings cluster more coherently.
+Previous configuration (nLists=6,797, nProbe=10) lost 30-55% &mdash; proper tuning matters enormously.
+</div>
+</div>
+
+<script>
+const DATA = {"n_questions": 6655, "rtt_mean": 32.0, "variants": ["small_256", "small_512", "small_1024", "small_1536", "large_256", "large_512", "large_1024", "large_1536"], "variant_labels": {"small_256": "Small 256d", "small_512": "Small 512d", "small_1024": "Small 1024d", "small_1536": "Small 1536d", "large_256": "Large 256d", "large_512": "Large 512d", "large_1024": "Large 1024d", "large_1536": "Large 1536d"}, "ks": [5, 10, 20, 50, 100], "metrics": ["recall", "success", "mrr_first", "mrr_last"], "metric_labels": {"recall": "Recall", "success": "Success", "mrr_first": "MRR First", "mrr_last": "MRR Last"}, "timing_chart": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "approx_total": [44.8, 45.7, 49.2, 53.3, 43.7, 44.5, 48.6, 53.8], "index_only": [12.8, 13.7, 17.2, 21.3, 11.7, 12.5, 16.6, 21.8], "bf": [5.17, 8.36, 13.79, 19.62, 5.19, 8.37, 13.86, 19.45], "rtt": 32.0}, "loss_charts": {"recall": {"5": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [5.1, 4.8, 5.0, 4.7, 3.5, 2.8, 2.6, 2.7]}, "10": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [5.4, 5.1, 5.4, 5.3, 4.0, 3.2, 2.9, 3.2]}, "20": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [5.7, 5.4, 5.8, 5.4, 4.4, 3.7, 3.5, 3.5]}, "50": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [6.3, 6.0, 6.0, 5.8, 5.2, 4.5, 3.8, 3.9]}, "100": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [6.8, 6.3, 6.3, 6.1, 5.7, 5.1, 4.3, 4.3]}}, "success": {"5": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [5.1, 5.2, 4.8, 3.7, 5.1, 3.6, 2.4, 2.9]}, "10": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [6.4, 5.9, 6.0, 5.5, 5.9, 4.5, 3.6, 4.2]}, "20": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [6.7, 6.7, 7.0, 6.2, 6.5, 5.5, 4.9, 4.9]}, "50": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [8.2, 8.1, 7.8, 7.4, 8.0, 7.2, 5.6, 5.9]}, "100": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [9.4, 8.6, 8.4, 8.2, 9.2, 8.3, 6.7, 6.7]}}, "mrr_first": {"5": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [4.9, 4.3, 4.8, 4.6, 2.9, 2.3, 2.5, 2.5]}, "10": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [4.9, 4.3, 4.8, 4.6, 3.0, 2.3, 2.5, 2.5]}, "20": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [5.0, 4.3, 4.8, 4.6, 3.0, 2.4, 2.5, 2.5]}, "50": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [5.0, 4.3, 4.8, 4.6, 3.0, 2.3, 2.5, 2.5]}, "100": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [5.0, 4.3, 4.8, 4.6, 3.0, 2.3, 2.5, 2.5]}}, "mrr_last": {"5": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [4.6, 4.8, 4.8, 3.9, 5.0, 3.3, 2.2, 2.7]}, "10": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [5.3, 5.2, 5.4, 4.7, 5.3, 3.7, 2.7, 3.2]}, "20": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [5.6, 5.5, 5.7, 4.9, 5.5, 4.0, 3.1, 3.5]}, "50": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [5.9, 5.8, 5.9, 5.1, 5.8, 4.3, 3.3, 3.7]}, "100": {"labels": ["Small 256d", "Small 512d", "Small 1024d", "Small 1536d", "Large 256d", "Large 512d", "Large 1024d", "Large 1536d"], "losses": [6.0, 5.9, 6.0, 5.2, 5.9, 4.4, 3.3, 3.7]}}}, "metric_table": [{"variant": "Small 256d", "k": 5, "recall_approx": 0.4479, "recall_bf": 0.4721, "recall_loss_pct": 5.1, "success_approx": 0.1465, "success_bf": 0.1543, "success_loss_pct": 5.1, "mrr_first_approx": 0.6301, "mrr_first_bf": 0.6629, "mrr_first_loss_pct": 4.9, "mrr_last_approx": 0.0532, "mrr_last_bf": 0.0558, "mrr_last_loss_pct": 4.6}, {"variant": "Small 256d", "k": 10, "recall_approx": 0.5187, "recall_bf": 0.5483, "recall_loss_pct": 5.4, "success_approx": 0.2227, "success_bf": 0.2379, "success_loss_pct": 6.4, "mrr_first_approx": 0.6388, "mrr_first_bf": 0.672, "mrr_first_loss_pct": 4.9, "mrr_last_approx": 0.0635, "mrr_last_bf": 0.0671, "mrr_last_loss_pct": 5.3}, {"variant": "Small 256d", "k": 20, "recall_approx": 0.5801, "recall_bf": 0.6152, "recall_loss_pct": 5.7, "success_approx": 0.3005, "success_bf": 0.3222, "success_loss_pct": 6.7, "mrr_first_approx": 0.6419, "mrr_first_bf": 0.6754, "mrr_first_loss_pct": 5.0, "mrr_last_approx": 0.0688, "mrr_last_bf": 0.0729, "mrr_last_loss_pct": 5.6}, {"variant": "Small 256d", "k": 50, "recall_approx": 0.6519, "recall_bf": 0.696, "recall_loss_pct": 6.3, "success_approx": 0.4054, "success_bf": 0.4415, "success_loss_pct": 8.2, "mrr_first_approx": 0.6431, "mrr_first_bf": 0.6767, "mrr_first_loss_pct": 5.0, "mrr_last_approx": 0.0722, "mrr_last_bf": 0.0767, "mrr_last_loss_pct": 5.9}, {"variant": "Small 256d", "k": 100, "recall_approx": 0.6958, "recall_bf": 0.7469, "recall_loss_pct": 6.8, "success_approx": 0.4736, "success_bf": 0.5228, "success_loss_pct": 9.4, "mrr_first_approx": 0.6433, "mrr_first_bf": 0.6769, "mrr_first_loss_pct": 5.0, "mrr_last_approx": 0.0732, "mrr_last_bf": 0.0779, "mrr_last_loss_pct": 6.0}, {"variant": "Small 512d", "k": 5, "recall_approx": 0.4897, "recall_bf": 0.5144, "recall_loss_pct": 4.8, "success_approx": 0.1824, "success_bf": 0.1923, "success_loss_pct": 5.2, "mrr_first_approx": 0.6811, "mrr_first_bf": 0.7117, "mrr_first_loss_pct": 4.3, "mrr_last_approx": 0.067, "mrr_last_bf": 0.0704, "mrr_last_loss_pct": 4.8}, {"variant": "Small 512d", "k": 10, "recall_approx": 0.5587, "recall_bf": 0.5886, "recall_loss_pct": 5.1, "success_approx": 0.2672, "success_bf": 0.284, "success_loss_pct": 5.9, "mrr_first_approx": 0.6879, "mrr_first_bf": 0.7189, "mrr_first_loss_pct": 4.3, "mrr_last_approx": 0.0784, "mrr_last_bf": 0.0827, "mrr_last_loss_pct": 5.2}, {"variant": "Small 512d", "k": 20, "recall_approx": 0.6211, "recall_bf": 0.6568, "recall_loss_pct": 5.4, "success_approx": 0.3524, "success_bf": 0.3778, "success_loss_pct": 6.7, "mrr_first_approx": 0.6905, "mrr_first_bf": 0.7217, "mrr_first_loss_pct": 4.3, "mrr_last_approx": 0.0843, "mrr_last_bf": 0.0892, "mrr_last_loss_pct": 5.5}, {"variant": "Small 512d", "k": 50, "recall_approx": 0.6897, "recall_bf": 0.7334, "recall_loss_pct": 6.0, "success_approx": 0.455, "success_bf": 0.4951, "success_loss_pct": 8.1, "mrr_first_approx": 0.6915, "mrr_first_bf": 0.7227, "mrr_first_loss_pct": 4.3, "mrr_last_approx": 0.0876, "mrr_last_bf": 0.093, "mrr_last_loss_pct": 5.8}, {"variant": "Small 512d", "k": 100, "recall_approx": 0.7331, "recall_bf": 0.7822, "recall_loss_pct": 6.3, "success_approx": 0.5273, "success_bf": 0.5767, "success_loss_pct": 8.6, "mrr_first_approx": 0.6917, "mrr_first_bf": 0.7229, "mrr_first_loss_pct": 4.3, "mrr_last_approx": 0.0886, "mrr_last_bf": 0.0942, "mrr_last_loss_pct": 5.9}, {"variant": "Small 1024d", "k": 5, "recall_approx": 0.5078, "recall_bf": 0.5347, "recall_loss_pct": 5.0, "success_approx": 0.2039, "success_bf": 0.2143, "success_loss_pct": 4.8, "mrr_first_approx": 0.7014, "mrr_first_bf": 0.7367, "mrr_first_loss_pct": 4.8, "mrr_last_approx": 0.0746, "mrr_last_bf": 0.0783, "mrr_last_loss_pct": 4.8}, {"variant": "Small 1024d", "k": 10, "recall_approx": 0.5765, "recall_bf": 0.6094, "recall_loss_pct": 5.4, "success_approx": 0.2888, "success_bf": 0.3071, "success_loss_pct": 6.0, "mrr_first_approx": 0.708, "mrr_first_bf": 0.7437, "mrr_first_loss_pct": 4.8, "mrr_last_approx": 0.086, "mrr_last_bf": 0.0909, "mrr_last_loss_pct": 5.4}, {"variant": "Small 1024d", "k": 20, "recall_approx": 0.6368, "recall_bf": 0.6757, "recall_loss_pct": 5.8, "success_approx": 0.3742, "success_bf": 0.4021, "success_loss_pct": 7.0, "mrr_first_approx": 0.7103, "mrr_first_bf": 0.7461, "mrr_first_loss_pct": 4.8, "mrr_last_approx": 0.0919, "mrr_last_bf": 0.0974, "mrr_last_loss_pct": 5.7}, {"variant": "Small 1024d", "k": 50, "recall_approx": 0.7059, "recall_bf": 0.7506, "recall_loss_pct": 6.0, "success_approx": 0.4811, "success_bf": 0.5217, "success_loss_pct": 7.8, "mrr_first_approx": 0.7112, "mrr_first_bf": 0.7469, "mrr_first_loss_pct": 4.8, "mrr_last_approx": 0.0954, "mrr_last_bf": 0.1014, "mrr_last_loss_pct": 5.9}, {"variant": "Small 1024d", "k": 100, "recall_approx": 0.7452, "recall_bf": 0.7949, "recall_loss_pct": 6.3, "success_approx": 0.5468, "success_bf": 0.5971, "success_loss_pct": 8.4, "mrr_first_approx": 0.7113, "mrr_first_bf": 0.7471, "mrr_first_loss_pct": 4.8, "mrr_last_approx": 0.0963, "mrr_last_bf": 0.1025, "mrr_last_loss_pct": 6.0}, {"variant": "Small 1536d", "k": 5, "recall_approx": 0.5184, "recall_bf": 0.544, "recall_loss_pct": 4.7, "success_approx": 0.2141, "success_bf": 0.2222, "success_loss_pct": 3.7, "mrr_first_approx": 0.7124, "mrr_first_bf": 0.7466, "mrr_first_loss_pct": 4.6, "mrr_last_approx": 0.0786, "mrr_last_bf": 0.0818, "mrr_last_loss_pct": 3.9}, {"variant": "Small 1536d", "k": 10, "recall_approx": 0.5862, "recall_bf": 0.6191, "recall_loss_pct": 5.3, "success_approx": 0.3032, "success_bf": 0.3208, "success_loss_pct": 5.5, "mrr_first_approx": 0.7184, "mrr_first_bf": 0.7531, "mrr_first_loss_pct": 4.6, "mrr_last_approx": 0.0905, "mrr_last_bf": 0.0949, "mrr_last_loss_pct": 4.7}, {"variant": "Small 1536d", "k": 20, "recall_approx": 0.6474, "recall_bf": 0.6843, "recall_loss_pct": 5.4, "success_approx": 0.3889, "success_bf": 0.4147, "success_loss_pct": 6.2, "mrr_first_approx": 0.7208, "mrr_first_bf": 0.7555, "mrr_first_loss_pct": 4.6, "mrr_last_approx": 0.0964, "mrr_last_bf": 0.1014, "mrr_last_loss_pct": 4.9}, {"variant": "Small 1536d", "k": 50, "recall_approx": 0.7127, "recall_bf": 0.7564, "recall_loss_pct": 5.8, "success_approx": 0.4932, "success_bf": 0.5324, "success_loss_pct": 7.4, "mrr_first_approx": 0.7215, "mrr_first_bf": 0.7562, "mrr_first_loss_pct": 4.6, "mrr_last_approx": 0.0998, "mrr_last_bf": 0.1053, "mrr_last_loss_pct": 5.1}, {"variant": "Small 1536d", "k": 100, "recall_approx": 0.7517, "recall_bf": 0.8005, "recall_loss_pct": 6.1, "success_approx": 0.5582, "success_bf": 0.6078, "success_loss_pct": 8.2, "mrr_first_approx": 0.7217, "mrr_first_bf": 0.7563, "mrr_first_loss_pct": 4.6, "mrr_last_approx": 0.1008, "mrr_last_bf": 0.1063, "mrr_last_loss_pct": 5.2}, {"variant": "Large 256d", "k": 5, "recall_approx": 0.5039, "recall_bf": 0.5224, "recall_loss_pct": 3.5, "success_approx": 0.211, "success_bf": 0.2224, "success_loss_pct": 5.1, "mrr_first_approx": 0.6682, "mrr_first_bf": 0.6885, "mrr_first_loss_pct": 2.9, "mrr_last_approx": 0.0772, "mrr_last_bf": 0.0813, "mrr_last_loss_pct": 5.0}, {"variant": "Large 256d", "k": 10, "recall_approx": 0.5762, "recall_bf": 0.6001, "recall_loss_pct": 4.0, "success_approx": 0.2996, "success_bf": 0.3186, "success_loss_pct": 5.9, "mrr_first_approx": 0.6756, "mrr_first_bf": 0.6963, "mrr_first_loss_pct": 3.0, "mrr_last_approx": 0.0892, "mrr_last_bf": 0.0942, "mrr_last_loss_pct": 5.3}, {"variant": "Large 256d", "k": 20, "recall_approx": 0.6396, "recall_bf": 0.6688, "recall_loss_pct": 4.4, "success_approx": 0.3875, "success_bf": 0.4144, "success_loss_pct": 6.5, "mrr_first_approx": 0.6781, "mrr_first_bf": 0.699, "mrr_first_loss_pct": 3.0, "mrr_last_approx": 0.0953, "mrr_last_bf": 0.1009, "mrr_last_loss_pct": 5.5}, {"variant": "Large 256d", "k": 50, "recall_approx": 0.7109, "recall_bf": 0.7496, "recall_loss_pct": 5.2, "success_approx": 0.4947, "success_bf": 0.5376, "success_loss_pct": 8.0, "mrr_first_approx": 0.6792, "mrr_first_bf": 0.7002, "mrr_first_loss_pct": 3.0, "mrr_last_approx": 0.0988, "mrr_last_bf": 0.1049, "mrr_last_loss_pct": 5.8}, {"variant": "Large 256d", "k": 100, "recall_approx": 0.7548, "recall_bf": 0.8006, "recall_loss_pct": 5.7, "success_approx": 0.5626, "success_bf": 0.6194, "success_loss_pct": 9.2, "mrr_first_approx": 0.6794, "mrr_first_bf": 0.7004, "mrr_first_loss_pct": 3.0, "mrr_last_approx": 0.0998, "mrr_last_bf": 0.106, "mrr_last_loss_pct": 5.9}, {"variant": "Large 512d", "k": 5, "recall_approx": 0.5474, "recall_bf": 0.5631, "recall_loss_pct": 2.8, "success_approx": 0.2598, "success_bf": 0.2696, "success_loss_pct": 3.6, "mrr_first_approx": 0.714, "mrr_first_bf": 0.7309, "mrr_first_loss_pct": 2.3, "mrr_last_approx": 0.0967, "mrr_last_bf": 0.0999, "mrr_last_loss_pct": 3.3}, {"variant": "Large 512d", "k": 10, "recall_approx": 0.6227, "recall_bf": 0.643, "recall_loss_pct": 3.2, "success_approx": 0.3602, "success_bf": 0.377, "success_loss_pct": 4.5, "mrr_first_approx": 0.7209, "mrr_first_bf": 0.7381, "mrr_first_loss_pct": 2.3, "mrr_last_approx": 0.1101, "mrr_last_bf": 0.1144, "mrr_last_loss_pct": 3.7}, {"variant": "Large 512d", "k": 20, "recall_approx": 0.6853, "recall_bf": 0.7118, "recall_loss_pct": 3.7, "success_approx": 0.4526, "success_bf": 0.4787, "success_loss_pct": 5.5, "mrr_first_approx": 0.7231, "mrr_first_bf": 0.7405, "mrr_first_loss_pct": 2.4, "mrr_last_approx": 0.1166, "mrr_last_bf": 0.1214, "mrr_last_loss_pct": 4.0}, {"variant": "Large 512d", "k": 50, "recall_approx": 0.7551, "recall_bf": 0.7907, "recall_loss_pct": 4.5, "success_approx": 0.5582, "success_bf": 0.6018, "success_loss_pct": 7.2, "mrr_first_approx": 0.724, "mrr_first_bf": 0.7414, "mrr_first_loss_pct": 2.3, "mrr_last_approx": 0.1201, "mrr_last_bf": 0.1255, "mrr_last_loss_pct": 4.3}, {"variant": "Large 512d", "k": 100, "recall_approx": 0.7934, "recall_bf": 0.8358, "recall_loss_pct": 5.1, "success_approx": 0.624, "success_bf": 0.6807, "success_loss_pct": 8.3, "mrr_first_approx": 0.7241, "mrr_first_bf": 0.7415, "mrr_first_loss_pct": 2.3, "mrr_last_approx": 0.121, "mrr_last_bf": 0.1266, "mrr_last_loss_pct": 4.4}, {"variant": "Large 1024d", "k": 5, "recall_approx": 0.5729, "recall_bf": 0.5881, "recall_loss_pct": 2.6, "success_approx": 0.2858, "success_bf": 0.2929, "success_loss_pct": 2.4, "mrr_first_approx": 0.7435, "mrr_first_bf": 0.7626, "mrr_first_loss_pct": 2.5, "mrr_last_approx": 0.1086, "mrr_last_bf": 0.111, "mrr_last_loss_pct": 2.2}, {"variant": "Large 1024d", "k": 10, "recall_approx": 0.6494, "recall_bf": 0.6692, "recall_loss_pct": 2.9, "success_approx": 0.3956, "success_bf": 0.4102, "success_loss_pct": 3.6, "mrr_first_approx": 0.7491, "mrr_first_bf": 0.7686, "mrr_first_loss_pct": 2.5, "mrr_last_approx": 0.1235, "mrr_last_bf": 0.1269, "mrr_last_loss_pct": 2.7}, {"variant": "Large 1024d", "k": 20, "recall_approx": 0.7143, "recall_bf": 0.7403, "recall_loss_pct": 3.5, "success_approx": 0.4954, "success_bf": 0.521, "success_loss_pct": 4.9, "mrr_first_approx": 0.7509, "mrr_first_bf": 0.7704, "mrr_first_loss_pct": 2.5, "mrr_last_approx": 0.1304, "mrr_last_bf": 0.1346, "mrr_last_loss_pct": 3.1}, {"variant": "Large 1024d", "k": 50, "recall_approx": 0.7811, "recall_bf": 0.8122, "recall_loss_pct": 3.8, "success_approx": 0.6009, "success_bf": 0.6368, "success_loss_pct": 5.6, "mrr_first_approx": 0.7517, "mrr_first_bf": 0.7712, "mrr_first_loss_pct": 2.5, "mrr_last_approx": 0.1339, "mrr_last_bf": 0.1384, "mrr_last_loss_pct": 3.3}, {"variant": "Large 1024d", "k": 100, "recall_approx": 0.8167, "recall_bf": 0.8535, "recall_loss_pct": 4.3, "success_approx": 0.6618, "success_bf": 0.7089, "success_loss_pct": 6.7, "mrr_first_approx": 0.7518, "mrr_first_bf": 0.7713, "mrr_first_loss_pct": 2.5, "mrr_last_approx": 0.1347, "mrr_last_bf": 0.1394, "mrr_last_loss_pct": 3.3}, {"variant": "Large 1536d", "k": 5, "recall_approx": 0.5838, "recall_bf": 0.6001, "recall_loss_pct": 2.7, "success_approx": 0.3008, "success_bf": 0.3098, "success_loss_pct": 2.9, "mrr_first_approx": 0.7531, "mrr_first_bf": 0.7724, "mrr_first_loss_pct": 2.5, "mrr_last_approx": 0.1134, "mrr_last_bf": 0.1165, "mrr_last_loss_pct": 2.7}, {"variant": "Large 1536d", "k": 10, "recall_approx": 0.6571, "recall_bf": 0.6789, "recall_loss_pct": 3.2, "success_approx": 0.4059, "success_bf": 0.4234, "success_loss_pct": 4.2, "mrr_first_approx": 0.7585, "mrr_first_bf": 0.7782, "mrr_first_loss_pct": 2.5, "mrr_last_approx": 0.1275, "mrr_last_bf": 0.1318, "mrr_last_loss_pct": 3.2}, {"variant": "Large 1536d", "k": 20, "recall_approx": 0.7225, "recall_bf": 0.7484, "recall_loss_pct": 3.5, "success_approx": 0.5077, "success_bf": 0.534, "success_loss_pct": 4.9, "mrr_first_approx": 0.7603, "mrr_first_bf": 0.7799, "mrr_first_loss_pct": 2.5, "mrr_last_approx": 0.1347, "mrr_last_bf": 0.1396, "mrr_last_loss_pct": 3.5}, {"variant": "Large 1536d", "k": 50, "recall_approx": 0.7879, "recall_bf": 0.8198, "recall_loss_pct": 3.9, "success_approx": 0.6119, "success_bf": 0.6505, "success_loss_pct": 5.9, "mrr_first_approx": 0.761, "mrr_first_bf": 0.7806, "mrr_first_loss_pct": 2.5, "mrr_last_approx": 0.1381, "mrr_last_bf": 0.1434, "mrr_last_loss_pct": 3.7}, {"variant": "Large 1536d", "k": 100, "recall_approx": 0.823, "recall_bf": 0.8598, "recall_loss_pct": 4.3, "success_approx": 0.6706, "success_bf": 0.7189, "success_loss_pct": 6.7, "mrr_first_approx": 0.7611, "mrr_first_bf": 0.7807, "mrr_first_loss_pct": 2.5, "mrr_last_approx": 0.1389, "mrr_last_bf": 0.1443, "mrr_last_loss_pct": 3.7}], "timing_table": [{"variant": "Small 256d", "approx_avg_ms": 44.8, "approx_p50_ms": 42.3, "approx_p95_ms": 65.5, "bf_avg_ms": 5.17, "bf_p50_ms": 4.97, "bf_p95_ms": 8.53, "index_only_ms": 12.8, "index_vs_bf": 2.48}, {"variant": "Small 512d", "approx_avg_ms": 45.7, "approx_p50_ms": 43.3, "approx_p95_ms": 63.6, "bf_avg_ms": 8.36, "bf_p50_ms": 7.88, "bf_p95_ms": 12.08, "index_only_ms": 13.7, "index_vs_bf": 1.64}, {"variant": "Small 1024d", "approx_avg_ms": 49.2, "approx_p50_ms": 46.7, "approx_p95_ms": 68.1, "bf_avg_ms": 13.79, "bf_p50_ms": 13.2, "bf_p95_ms": 17.71, "index_only_ms": 17.2, "index_vs_bf": 1.25}, {"variant": "Small 1536d", "approx_avg_ms": 53.3, "approx_p50_ms": 50.4, "approx_p95_ms": 73.0, "bf_avg_ms": 19.62, "bf_p50_ms": 19.21, "bf_p95_ms": 23.69, "index_only_ms": 21.3, "index_vs_bf": 1.09}, {"variant": "Large 256d", "approx_avg_ms": 43.7, "approx_p50_ms": 41.4, "approx_p95_ms": 61.5, "bf_avg_ms": 5.19, "bf_p50_ms": 4.98, "bf_p95_ms": 8.88, "index_only_ms": 11.7, "index_vs_bf": 2.26}, {"variant": "Large 512d", "approx_avg_ms": 44.5, "approx_p50_ms": 42.5, "approx_p95_ms": 58.8, "bf_avg_ms": 8.37, "bf_p50_ms": 7.92, "bf_p95_ms": 12.08, "index_only_ms": 12.5, "index_vs_bf": 1.5}, {"variant": "Large 1024d", "approx_avg_ms": 48.6, "approx_p50_ms": 46.3, "approx_p95_ms": 64.0, "bf_avg_ms": 13.86, "bf_p50_ms": 13.33, "bf_p95_ms": 17.69, "index_only_ms": 16.6, "index_vs_bf": 1.2}, {"variant": "Large 1536d", "approx_avg_ms": 53.8, "approx_p50_ms": 50.9, "approx_p95_ms": 74.5, "bf_avg_ms": 19.45, "bf_p50_ms": 19.01, "bf_p95_ms": 23.36, "index_only_ms": 21.8, "index_vs_bf": 1.12}]};
+const METRICS = DATA.metrics;
+const METRIC_LABELS = DATA.metric_labels;
+const KS = DATA.ks;
+
+// ===== TIMING CHART =====
+(function() {
+    const t = DATA.timing_chart;
+    const traces = [
+        {x: t.labels, y: t.approx_total, type: 'bar', name: 'APPROX total (incl. network)',
+          marker: {color: '#e74c3c'}},
+        {x: t.labels, y: t.index_only, type: 'bar', name: 'Index only (APPROX − RTT)',
+          marker: {color: '#f39c12'}},
+        {x: t.labels, y: t.bf, type: 'bar', name: 'Brute force (local)',
+          marker: {color: '#3498db'}},
+    ];
+    const layout = {
+        title: 'Average Query Time (ms)',
+        barmode: 'group',
+        yaxis: {title: 'Time (ms)'},
+        xaxis: {tickangle: -25},
+        legend: {orientation: 'h', x: 0.5, xanchor: 'center', y: 1.15},
+        margin: {t: 90, b: 80},
+        hoverlabel: {namelength: -1},
+        hovermode: 'x unified',
+        shapes: [{
+            type: 'line', x0: -0.5, x1: t.labels.length - 0.5,
+            y0: t.rtt, y1: t.rtt,
+            line: {color: '#999', width: 2, dash: 'dash'},
+        }],
+        annotations: [{
+            x: t.labels.length - 1, y: t.rtt, text: 'Network RTT (' + t.rtt + 'ms)',
+            showarrow: false, yshift: 12, font: {size: 11, color: '#999'},
+        }],
+    };
+    Plotly.newPlot('timing_chart', traces, layout, {responsive: true});
+})();
+
+// ===== METRIC LOSS CHART =====
+(function() {
+    let currentMetric = 'recall';
+    let currentK = '100';
+
+    const tabsEl = document.getElementById('loss-metric-tabs');
+    METRICS.forEach(m => {
+        const btn = document.createElement('button');
+        btn.className = 'tab-btn' + (m === currentMetric ? ' active' : '');
+        btn.textContent = METRIC_LABELS[m];
+        btn.onclick = () => {
+            currentMetric = m;
+            tabsEl.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            renderLossChart();
+        };
+        tabsEl.appendChild(btn);
+    });
+
+    const kSel = document.getElementById('loss-k-selector');
+    kSel.innerHTML = '<label>K = </label>';
+    KS.forEach(k => {
+        const btn = document.createElement('button');
+        btn.className = 'tab-btn' + (String(k) === currentK ? ' active' : '');
+        btn.textContent = k;
+        btn.style.padding = '4px 12px';
+        btn.onclick = () => {
+            currentK = String(k);
+            kSel.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            renderLossChart();
+        };
+        kSel.appendChild(btn);
+    });
+
+    function renderLossChart() {
+        const d = DATA.loss_charts[currentMetric][currentK];
+        if (!d) return;
+
+        // Color bars: red intensity by loss amount
+        const colors = d.losses.map(l => {
+            const intensity = Math.min(l / 15, 1);
+            const r = Math.round(231 + (192 - 231) * (1 - intensity));
+            const g = Math.round(76 + (57 - 76) * (1 - intensity));
+            const b = Math.round(60 + (43 - 60) * (1 - intensity));
+            return `rgb(${r},${g},${b})`;
+        });
+
+        const traces = [{
+            x: d.labels, y: d.losses, type: 'bar',
+            marker: {color: colors, line: {width: 1, color: '#c0392b'}},
+            text: d.losses.map(l => l.toFixed(1) + '%'),
+            textposition: 'outside',
+        }];
+        const layout = {
+            title: METRIC_LABELS[currentMetric] + ' Loss % @ K=' + currentK + ' (APPROX vs Brute Force)',
+            yaxis: {title: 'Loss (%)', rangemode: 'tozero'},
+            xaxis: {tickangle: -25},
+            showlegend: false,
+            margin: {t: 60, b: 80},
+        };
+        Plotly.newPlot('loss_chart', traces, layout, {responsive: true});
+    }
+    renderLossChart();
+})();
+
+// ===== TABLES =====
+function setupTable(tableId, infoId, tableData) {
+    if (!tableData || !tableData.length) return;
+    const cols = Object.keys(tableData[0]);
+    const numericCols = new Set(cols.filter(c => typeof tableData[0][c] === 'number'));
+    const uniqueVals = {};
+    cols.forEach(c => {
+        if (!numericCols.has(c)) uniqueVals[c] = [...new Set(tableData.map(r => r[c]))].sort();
+    });
+
+    let sortCol = null, sortDir = 'desc';
+    let filters = {};
+    cols.forEach(c => { filters[c] = ''; });
+
+    function render() {
+        let filtered = tableData.filter(r => {
+            for (const c of cols) {
+                const f = filters[c];
+                if (!f) continue;
+                if (numericCols.has(c)) {
+                    const m = f.match(/^([><=!]+)?\s*([\d.]+)$/);
+                    if (!m) continue;
+                    const op = m[1] || '=';
+                    const val = parseFloat(m[2]);
+                    if (isNaN(val)) continue;
+                    const rv = r[c];
+                    if (op === '>=' && !(rv >= val)) return false;
+                    if (op === '<=' && !(rv <= val)) return false;
+                    if (op === '>' && !(rv > val)) return false;
+                    if (op === '<' && !(rv < val)) return false;
+                    if (op === '=' && rv !== val) return false;
+                } else {
+                    if (f !== '' && String(r[c]) !== f) return false;
+                }
+            }
+            return true;
+        });
+        if (sortCol !== null) {
+            filtered.sort((a, b) => {
+                let va = a[sortCol], vb = b[sortCol];
+                if (typeof va === 'number') return sortDir === 'asc' ? va - vb : vb - va;
+                return sortDir === 'asc' ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+            });
+        }
+
+        const tbl = document.getElementById(tableId);
+        let hdr = '<tr>';
+        cols.forEach(c => {
+            const arrow = sortCol === c ? (sortDir === 'asc' ? ' \u25B2' : ' \u25BC') : ' \u25BF';
+            hdr += '<th data-col="' + c + '">' + c + '<span class="sort-arrow">' + arrow + '</span></th>';
+        });
+        hdr += '</tr>';
+
+        let flt = '<tr class="filter-row">';
+        cols.forEach(c => {
+            if (numericCols.has(c)) {
+                flt += '<th><input type="text" data-col="' + c + '" placeholder="e.g. >=5" value="' + (filters[c]||'') + '"></th>';
+            } else {
+                const opts = (uniqueVals[c]||[]).map(v => '<option value="'+v+'"'+(filters[c]===String(v)?' selected':'')+'>'+v+'</option>').join('');
+                flt += '<th><select data-col="' + c + '"><option value="">All</option>' + opts + '</select></th>';
+            }
+        });
+        flt += '</tr>';
+
+        tbl.querySelector('thead').innerHTML = hdr + flt;
+        tbl.querySelector('tbody').innerHTML = filtered.map(r =>
+            '<tr>' + cols.map(c => '<td>' + r[c] + '</td>').join('') + '</tr>'
+        ).join('');
+
+        const info = document.getElementById(infoId);
+        if (info) info.textContent = 'Showing ' + filtered.length + ' of ' + tableData.length + ' rows';
+
+        tbl.querySelectorAll('thead tr:first-child th').forEach(th => {
+            th.onclick = () => {
+                const c = th.dataset.col;
+                if (sortCol === c) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+                else { sortCol = c; sortDir = 'desc'; }
+                render();
+            };
+        });
+        tbl.querySelectorAll('.filter-row input').forEach(inp => {
+            inp.oninput = () => { filters[inp.dataset.col] = inp.value; render(); };
+        });
+        tbl.querySelectorAll('.filter-row select').forEach(sel => {
+            sel.onchange = () => { filters[sel.dataset.col] = sel.value; render(); };
+        });
+    }
+    render();
+}
+
+setupTable('timing-table', 'timing-table-info', DATA.timing_table);
+setupTable('metric-table', 'metric-table-info', DATA.metric_table);
+</script>
+</body>
+</html>
